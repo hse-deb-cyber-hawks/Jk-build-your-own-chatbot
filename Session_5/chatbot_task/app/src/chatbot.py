@@ -75,8 +75,7 @@ class CustomChatBot:
         self.retriever = self.vector_db.as_retriever(search_kwargs={"k": 4})
 
         # Task: Initialize the large language model (LLM) from Ollama
-        self.llm = ChatOllama(model = MODEL_NAME, base_url=f"http://{OLLAMA_HOST_NAME}:11434")
-
+        self.llm = ChatOllama(model = MODEL_NAME, base_url=f"http://{OLLAMA_HOST_NAME}:11434", temperature= 0.2)
         # Set up the retrieval-augmented generation (RAG) pipeline
         self.qa_rag_chain = self._initialize_qa_rag_chain()
 
@@ -140,7 +139,7 @@ class CustomChatBot:
             # Remove surrogate pairs
             text = re.sub(r'[\ud800-\udfff]', '', text)
             # Optionally remove non-ASCII characters (depends on your use case)
-            text = re.sub(r'[^\x00-\x7F]+', '', text)
+            #text = re.sub(r'[^\x00-\x7F]+', '', text)
             return text
 
         pages_chunked_cleaned = [
@@ -168,18 +167,22 @@ class CustomChatBot:
 
         # Task: Define prompt
         prompt_template =   """
-                            You are a helpful assistant that answers questions based on retrieved context.
-                            Keep your answers short, accurate, and grounded in the provided documents.
+        You are a helpful assistant that answers questions based on the retrieved CONTEXT.
 
-                            CONTEXT:
-                            {context}
+        Instructions:
+        - Use the SAME terms, wording, and technical expressions exactly as they appear in the CONTEXT whenever possible.
+        - Reuse original phrases or sentences from the CONTEXT when they are relevant.
+        - When quoting parts of the CONTEXT verbatim, place them inside quotation marks.
+        - Your answer may be as long or detailed as needed — do NOT shorten or summarize unnaturally.
 
-                            QUESTION:
-                            {question}
+        CONTEXT:
+        {context}
 
-                            ANSWER:
-                            """
+        QUESTION:
+        {question}
 
+        ANSWER:
+        """               
         # Task: Initialize prompt langchain prompt template
         rag_prompt = ChatPromptTemplate.from_template(prompt_template)
 
