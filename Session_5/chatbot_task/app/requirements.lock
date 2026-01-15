@@ -104,6 +104,10 @@ deprecated==1.2.14
     # via opentelemetry-semantic-conventions
 distro==1.9.0
     # via openai
+duckduckgo_search
+    #neu
+docx2txt
+    #neu
 executing==2.1.0
     # via stack-data
 fastapi==0.114.0
@@ -111,6 +115,8 @@ fastapi==0.114.0
     # via langchain-chroma
 fastjsonschema==2.20.0
     # via nbformat
+fpdf2
+    # neu
 filelock==3.15.4
     # via huggingface-hub
 flatbuffers==24.3.25
