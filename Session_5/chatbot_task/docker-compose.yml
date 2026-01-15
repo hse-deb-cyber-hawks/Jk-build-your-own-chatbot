@@ -1,26 +1,31 @@
 version: '3'
 
 services:
-
   chatbot:
     build:
       context: ./app
       dockerfile: Dockerfile
+    
     ports:
-      - "5001:5001"
-      - "5678:5678"
+      - "5001:8501"
+      
     container_name: chatbot
+  
+    command: streamlit run main.py --server.port=8501 --server.address=0.0.0.0
+    
     environment:
       - INDEX_DATA=0
-      - MODEL_NAME=llama3.2:1B
+      - MODEL_NAME=llama3.2:1b
       - EMBEDDING_MODEL=bge-m3
-      - PULL_EMBEDDING_MODEL=0
+      - PULL_EMBEDDING_MODEL=1
       - OLLAMA_HOST_NAME=ollama
       - CHROMA_HOST_NAME=chroma
       - PDF_DOC_PATH=/app/src/AI_Book.pdf
     depends_on:
       chroma:
         condition: service_healthy
+      ollama:
+        condition: service_started
     networks:
       - app-network
     volumes:
@@ -29,13 +34,13 @@ services:
   chroma:
     image: chromadb/chroma:0.5.13
     volumes:
-      - ../../container_cache/chroma:/chroma/chroma
+      - ./chroma_data:/chroma/chroma
     ports:
       - "8000:8000"
     container_name: chroma
     environment:
       - IS_PERSISTENT=TRUE
-      - PERSIST_DIRECTORY=./chroma/chroma
+      - PERSIST_DIRECTORY=/chroma/chroma
     healthcheck: 
         test: curl localhost:8000/api/v1/heartbeat || exit 1
         interval: 10s
@@ -46,15 +51,15 @@ services:
       - app-network
 
   ollama:
-    image: ollama/ollama
+    image: ollama/ollama:latest
     ports:
-      - 11434:11434
+      - "11434:11434"
     volumes:
-      - ../../container_cache/ollama/models:/data/models/ollama/models
+      - ./ollama_data:/root/.ollama
     container_name: ollama
     tty: true
     entrypoint: ["/bin/bash", "-c"]
-    command: ["( /bin/ollama serve & sleep 5; /bin/ollama run llama3.2:1B )"]
+    command: ["( /bin/ollama serve & sleep 5; /bin/ollama pull llama3.2:1b; /bin/ollama pull bge-m3; wait )"]
     environment:
       - OLLAMA_KEEP_ALIVE=24h
       - OLLAMA_HOST=0.0.0.0

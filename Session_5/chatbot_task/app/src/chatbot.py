@@ -1,5 +1,3 @@
-
-
 import chromadb
 from chromadb.config import DEFAULT_TENANT, DEFAULT_DATABASE, Settings
 from langchain_core.documents.base import Document
@@ -10,188 +8,204 @@ from langchain_core.load.serializable import Serializable
 from langchain_chroma import Chroma
 from chromadb.api import ClientAPI
 from langchain_ollama import ChatOllama, OllamaEmbeddings
-from langchain_community.document_loaders import PyPDFLoader
+from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from duckduckgo_search import DDGS 
 import requests
 import re
 from uuid import uuid4
-from typing import List
+from typing import List, Tuple
 import logging
 import os
+import datetime
+from fpdf import FPDF 
 
-# Hint: Use these variables in your tasks
 OLLAMA_HOST_NAME = os.environ.get("OLLAMA_HOST_NAME", "localhost")
 CHROMA_HOST_NAME = os.environ.get("CHROMA_HOST_NAME", "localhost")
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "bge-m3")
-MODEL_NAME = os.environ.get("MODEL_NAME", "llama3.2:1B")
+MODEL_NAME = os.environ.get("MODEL_NAME", "llama3.2:1b")
 PDF_DOC_PATH = os.environ.get("PDF_DOC_PATH", "src/AI_Book.pdf")
 
-logging.basicConfig(
-    level=logging.INFO,  # Change to DEBUG for more details
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.StreamHandler(),  # Console logs
-    ],
-)
-
-logger = logging.getLogger(__name__)
+print("--- CHATBOT BACKEND GESTARTET ---")
 
 class CustomChatBot:
-    """
-    A class representing a chatbot that uses a ChromaDB client for document retrieval
-    and the ChatOllama model for generating answers.
-
-    This chatbot uses a retrieval-augmented generation (RAG) pipeline where it retrieves
-    relevant information from a custom document database (ChromaDB) and then generates
-    concise answers using a language model (ChatOllama).
-    """
-
     def __init__(self, index_data: bool, pull_embedding_model: bool) -> None:
-        """
-        Initialize the CustomChatBot class by setting up the ChromaDB client for document retrieval
-        and the ChatOllama language model for answer generation.
-        """
-
-        # Initialize the embedding function for document retrieval
         if pull_embedding_model:
-            logger.info(f"Pulling embedding model{EMBEDDING_MODEL} now.")
             self._pull_embedding_model()
 
-        # Task: initialize the embedding model
-        self.embedding_function = ...
-
-        # Initialize the ChromaDB client
+        self.embedding_function = OllamaEmbeddings(model=EMBEDDING_MODEL, base_url=f"http://{OLLAMA_HOST_NAME}:11434")
         self.client = self._initialize_chroma_client()
-        
-        # Get or create the document collection in ChromaDB
         self.vector_db = self._initialize_vector_db()
 
-        # Process pdf, embedd data and index to ChromaDB
         if index_data:
-            logger.info(f"Index data to chroma db now.")
             self._index_data_to_vector_db()
 
-        # Task: Initialize the document retriever
-        self.retriever = ...
-
-        # Task: Initialize the large language model (LLM) from Ollama
-        self.llm = ...
-
-        # Set up the retrieval-augmented generation (RAG) pipeline
-        self.qa_rag_chain = self._initialize_qa_rag_chain()
+        self.retriever = self.vector_db.as_retriever(search_kwargs={"k": 4})
+        self.llm = ChatOllama(model=MODEL_NAME, base_url=f"http://{OLLAMA_HOST_NAME}:11434", temperature=0.2)
+        
+        # Standard: Fachexperte
+        self.current_persona = "expert"
+        self.qa_rag_chain = self._initialize_chain(persona="expert")
 
     def _pull_embedding_model(self):
-        logger.info(f"Pull embedding model {EMBEDDING_MODEL}")
         try:
-
-            response = requests.post(f"http://{OLLAMA_HOST_NAME}:11434/api/pull", json = {"name": EMBEDDING_MODEL,  "stream": False})
-            response.raise_for_status()
-            logger.info(response.json())
+            requests.post(f"http://{OLLAMA_HOST_NAME}:11434/api/pull", json={"name": EMBEDDING_MODEL, "stream": False})
         except:
-            raise
+            pass
 
     def _initialize_chroma_client(self) -> ClientAPI:
-        """
-        Initialize and return a ChromaDB HTTP client for document retrieval.
-
-        Returns:
-            chromadb.HttpClient: A client used to communicate with ChromaDB.
-        """ 
-        logger.info("Initialize chroma db client.")
-
-        # Task: Initilaize chromadb http client
-        return ...
+        return chromadb.HttpClient(host=CHROMA_HOST_NAME, port=8000, ssl=False, headers=None, settings=Settings(allow_reset=True, anonymized_telemetry=False), tenant=DEFAULT_TENANT, database=DEFAULT_DATABASE)
 
     def _initialize_vector_db(self) -> Chroma:
-        """
-        Initialize and return a Chroma vector database using the HTTP client.
-
-        Returns:
-            Chroma: A vector database instance connected to the document collection in ChromaDB.
-        """
-        logger.info("Initialize chroma vector db.")
-
-        # Task initialize langchain chromadb object with chromadb http client and embedding function
-        return ...
+        return Chroma(client=self.client, collection_name="ai_model_book", embedding_function=self.embedding_function)
 
     def _index_data_to_vector_db(self):
+        if os.path.exists(PDF_DOC_PATH):
+            print(f"Lade Standard-Buch: {PDF_DOC_PATH}")
+            self.ingest_new_file(PDF_DOC_PATH, "pdf")
+        else:
+            print("Standard-Buch nicht gefunden.")
 
-        pdf_doc = PDF_DOC_PATH
+    def ingest_new_file(self, file_path: str, file_type: str) -> Tuple[bool, str]:
+        print(f"DEBUG: Versuche Datei zu laden: {file_path}")
+        loader = None
+        if file_type == "pdf":
+            loader = PyPDFLoader(file_path)
+        elif file_type == "docx":
+            loader = Docx2txtLoader(file_path)
+        elif file_type == "txt":
+            loader = TextLoader(file_path)
+            
+        if not loader: return False, "Typ nicht unterstützt."
 
-        # Create pdf data loaders
-        loader = PyPDFLoader(pdf_doc)
-
-        # Load and split documents in chunks
-        pages_chunked = loader.load_and_split(text_splitter=RecursiveCharacterTextSplitter())
-
-        # Function to clean text by removing invalid unicode characters, including surrogate pairs
-        def clean_text(text):
-            # Remove surrogate pairs
-            text = re.sub(r'[\ud800-\udfff]', '', text)
-            # Optionally remove non-ASCII characters (depends on your use case)
-            text = re.sub(r'[^\x00-\x7F]+', '', text)
-            return text
-
-        pages_chunked_cleaned = [
-            Document(page_content=clean_text(doc.page_content), metadata=doc.metadata)
-            for doc in pages_chunked
-        ]
-
-        uuids = [str(uuid4()) for _ in range(len(pages_chunked_cleaned[0:100]))]
-
-        self.vector_db.add_documents(documents=pages_chunked_cleaned[0:100], ids=uuids)
-
-    def _initialize_qa_rag_chain(self) -> RunnableSerializable[Serializable, str]:
-        """
-        Set up the retrieval-augmented generation (RAG) pipeline for answering questions.
-        
-        The pipeline consists of:
-        - Retrieving relevant documents from ChromaDB.
-        - Formatting the retrieved documents for input into the language model (LLM).
-        - Using the LLM to generate concise answers.
-        
-        Returns:
-            dict: The RAG pipeline configuration.
-        """
-        logger.info("Initialize rag chain.")
-
-        # Task: Define prompt
-        prompt_template = ...
-
-        # Task: Initialize prompt langchain prompt template
-        rag_prompt = ...
-
-        # Task: Build the RAG pipeline using the retriever and LLM
-        return ...
-
-    def _format_docs(self, docs: List[Document]) -> str:
-        """
-        Helper function to format the retrieved documents into a single string.
-        
-        Args:
-            docs (List[Document]): A list of documents retrieved by ChromaDB.
-
-        Returns:
-            str: A string containing the concatenated content of all retrieved documents.
-        """
-        return "\n\n".join(doc.page_content for doc in docs)
-        
-    async def astream(self, question: str):
-        """
-        Handle a user query asynchronously by running the question through the RAG pipeline and stream the answer.
-
-        Args:
-            question (str): The user's question as a string.
-
-        Yields:
-            str: The generated answer from the model, streamed chunk by chunk.
-        """
-        logger.info("Streaming RAG chain response.")
         try:
-            async for event in self.qa_rag_chain.astream_events(question, version="v2"):
-                    # Task: Filter stream events to get chunk which can be returned to the streamlit interface
-                    ...
-                    yield chunk
+            raw_pages = loader.load()
+            if not raw_pages: return False, "Datei leer."
+            
+            total_text = "".join([p.page_content for p in raw_pages])
+            if len(total_text) < 50: return False, "Zu wenig Text (Scan?)."
+
+            splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+            docs = splitter.split_documents(raw_pages)
+            docs = [Document(page_content=re.sub(r'[\ud800-\udfff]', '', d.page_content), metadata=d.metadata) for d in docs]
+            
+            if docs:
+                ids = [str(uuid4()) for _ in range(len(docs))]
+                self.vector_db.add_documents(documents=docs, ids=ids)
+                print(f"DEBUG: {len(docs)} Chunks gespeichert.")
+                return True, f"Erfolg! {len(docs)} Abschnitte gelernt."
+            return False, "Fehler beim Splitten."
         except Exception as e:
-            logger.error(f"Error in stream_answer: {e}", exc_info=True)
-            raise
+            return False, f"Fehler: {str(e)}"
+
+    # --- HIER IST DIE NEUE STIL-LOGIK ---
+    def _initialize_chain(self, persona="expert") -> RunnableSerializable[Serializable, str]:
+        
+        # 1. FACHIDIOT (Anfänger / Laie)
+        if persona == "beginner":
+            sys_msg = """Du bist ein geduldiger Erklärer für komplette Anfänger (Laien).
+            REGELN:
+            - Antworte KURZ und KNAPP.
+            - Nutze KEINE komplizierten Fachbegriffe. Wenn nötig, umschreibe sie einfach.
+            - Nutze einfache Vergleiche aus dem Alltag.
+            - Dein Ziel: Jeder, der noch nie davon gehört hat, muss es verstehen.
+            """
+            
+        # 2. MITTEL (Fortgeschrittener)
+        elif persona == "intermediate":
+            sys_msg = """Du bist ein hilfreicher Tutor.
+            REGELN:
+            - Antworte ausführlicher als für Anfänger, aber verliere dich nicht in Details.
+            - Nutze wichtige Fachbegriffe, aber erkläre sie kurz, falls sie komplex sind.
+            - Deine Sprache soll präzise, aber gut lesbar und verständlich sein.
+            - Biete eine gute Balance aus Fakten und Verständlichkeit.
+            """
+            
+        # 3. FACHEXPERTE (Wissenschaftlich)
+        else: # expert
+            sys_msg = """Du bist ein hochqualifizierter Fachexperte und Wissenschaftler.
+            REGELN:
+            - Antworte ausführlich, detailliert und auf akademischem Niveau.
+            - Nutze korrekte Fachterminologie (Termini Technici) ohne sie unnötig zu vereinfachen.
+            - Bleibe strikt sachlich, objektiv und faktisch.
+            - Deine Zielgruppe sind andere Experten oder Studenten.
+            """
+
+        system_instruction = f"""{sys_msg}
+        
+        GENERELLE ANWEISUNG:
+        1. Nutze primär den KONTEXT (Dateien/Buch).
+        2. Wenn Kontext leer -> Nutze dein Wissen, aber bleibe im gewählten Stil!
+        3. Antworte direkt auf die Frage.
+        """
+
+        rag_prompt = ChatPromptTemplate.from_messages([
+            ("system", system_instruction),
+            ("system", "KONTEXT:\n{context}"),
+            ("human", "VERLAUF:\n{history}\n\nFRAGE:\n{question}")
+        ])
+        
+        return rag_prompt | self.llm | StrOutputParser()
+
+    def set_persona(self, persona: str):
+        self.current_persona = persona
+        self.qa_rag_chain = self._initialize_chain(persona)
+
+    async def astream(self, question: str, history: List[dict] = [], use_web: bool = False):
+        context_text = ""
+        if use_web:
+            try:
+                results = DDGS().text(question, max_results=3)
+                if results: context_text = "\n".join([f"{r['title']}: {r['body']}" for r in results])
+            except: pass
+        else:
+            try:
+                docs = self.retriever.invoke(question)
+                if docs: context_text = "\n\n".join(d.page_content for d in docs)
+            except: pass
+
+        history_text = "\n".join([f"User: {m.get('content', '')}" if m.get('role') == 'user' else f"Bot: {m.get('content', '')}" for m in history[-2:]])
+        
+        input_data = {"question": question, "context": context_text, "history": history_text}
+        
+        async for event in self.qa_rag_chain.astream_events(input_data, version="v2"):
+            if event["event"] == "on_parser_stream": yield event["data"]["chunk"]
+
+    def save_chat_to_pdf(self, chat_history: List[dict], filename: str = "Lernsession.pdf") -> str:
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Arial", 'B', 16)
+        pdf.cell(0, 10, "Protokoll", ln=True, align='C')
+        pdf.ln(10)
+        pdf.set_font("Arial", size=12)
+        for msg in chat_history:
+            role = "DU" if msg.get("role") == "user" else "BOT"
+            content = str(msg.get("content", "")).encode('latin-1', 'replace').decode('latin-1')
+            pdf.set_font("Arial", 'B', 12)
+            pdf.cell(0, 8, f"{role}:", ln=True)
+            pdf.set_font("Arial", '', 11)
+            pdf.multi_cell(0, 6, content)
+            pdf.ln(5)
+        path = f"/app/{filename}" if os.path.exists("/app") else filename
+        try:
+            pdf.output(path)
+            return path
+        except: return None
+
+    def generate_quiz(self, text_input: str) -> str:
+        template = """
+        Erstelle ein Quiz mit 3 Fragen (Multiple Choice) basierend auf diesem KONTEXT:
+        "{text_input}"
+        
+        Wenn der Text oben kein Wissen enthält, erstelle ein Quiz über "Künstliche Intelligenz".
+        
+        Format:
+        1. Frage
+        A) ...
+        B) ...
+        C) ...
+        Lösung: ...
+        """
+        prompt = ChatPromptTemplate.from_template(template)
+        chain = prompt | self.llm | StrOutputParser()
+        return chain.invoke({"text_input": text_input})
